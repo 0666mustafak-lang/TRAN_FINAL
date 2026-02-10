@@ -37,12 +37,7 @@ def load_channels():
             except: return []
     return []
 
-def save_channels():
-    with open(CHANNELS_FILE, "w") as f:
-        json.dump(RECENT_CHANNELS, f, indent=2)
-
 RECENT_CHANNELS = load_channels()
-MAX_RECENT = 7
 
 # ================= BOT =================
 bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
@@ -53,17 +48,6 @@ TEMP_SESSIONS = {}
 # ================= HELPERS =================
 def clean_caption(txt):
     return re.sub(r'@\w+|https?://\S+', '', txt or '')
-
-async def get_accounts():
-    accs = []
-    for k in sorted(os.environ.keys()):
-        if k.startswith("TG_SESSION_"):
-            try:
-                async with TelegramClient(StringSession(os.environ[k]), API_ID, API_HASH) as c:
-                    me = await c.get_me()
-                    accs.append((k, me.first_name or me.username or "NoName"))
-            except: pass
-    return accs
 
 async def show_main_menu(event):
     await event.respond(
@@ -105,20 +89,36 @@ async def router(event):
 
     step = s.get("step")
 
-    # ===== حل مشكلة صفنة الرقم (طلب الكود في خلفية الكود) =====
+    # ===== حل "الفشل" و "الصفنة" =====
     if step == "temp_phone":
-        await event.respond("⏳ جاري طلب الكود من تليجرام...")
-        
-        c = TelegramClient(StringSession(), API_ID, API_HASH)
+        # 1. تنظيف أي جلسة سابقة معلقة
+        if uid in TEMP_SESSIONS:
+            try: await TEMP_SESSIONS[uid].disconnect()
+            except: pass
+            
+        # 2. إنشاء العميل بضبط الـ Sequential
+        c = TelegramClient(StringSession(), API_ID, API_HASH, sequential_updates=True)
         TEMP_SESSIONS[uid] = c
         
+        m = await event.respond("⏳ جاري محاولة الاتصال...")
+        
         try:
+            # 3. الاتصال وطلب الكود مع تايم أوت لعدم الصفنة
             await c.connect()
-            sent = await c.send_code_request(text)
-            s.update({"client": c, "phone": text, "hash": sent.phone_code_hash, "step": "temp_code"})
-            await event.respond("✅ أرسل كود التحقق الآن:")
+            if not await c.is_user_authorized():
+                # طلب الكود هو النقطة التي يظهر فيها الفشل عادةً
+                sent = await asyncio.wait_for(c.send_code_request(text), timeout=30)
+                s.update({"client": c, "phone": text, "hash": sent.phone_code_hash, "step": "temp_code"})
+                await m.edit("✅ تم إرسال الكود بنجاح. أرسله هنا:")
+            else:
+                s.update({"client": c, "step": "main"})
+                await m.edit("🟢 الحساب مسجل دخول مسبقاً!")
+                await show_main_menu(event)
+                
+        except asyncio.TimeoutError:
+            await m.edit("❌ فشل: تليجرام لم يستجب (Timeout). جرب مرة أخرى.")
         except Exception as e:
-            await event.respond(f"❌ فشل: {e}")
+            await m.edit(f"❌ فشل الاتصال: {str(e)}")
         return
 
     if step == "temp_code":
@@ -130,7 +130,7 @@ async def router(event):
             s["step"] = "temp_2fa"
             await event.respond("🔐 أرسل رمز 2FA:")
         except Exception as e:
-            await event.respond(f"❌ خطأ: {e}")
+            await event.respond(f"❌ خطأ في الكود: {e}")
         return
 
     if step == "temp_2fa":
@@ -139,10 +139,10 @@ async def router(event):
             s["step"] = "main"
             await show_main_menu(event)
         except Exception as e:
-            await event.respond(f"❌ خطأ: {e}")
+            await event.respond(f"❌ خطأ في الرمز: {e}")
         return
 
-    # ===== INPUTS =====
+    # ===== ميزات النقل والسرقة (نفس كودك) =====
     if step == "delay":
         s["delay"] = int(text) if text.isdigit() else 10
         s["step"] = "target"
@@ -165,41 +165,26 @@ async def cb(event):
     s = state.setdefault(uid, {})
     d = event.data
 
-    if d == b"sessions":
-        accs = await get_accounts()
-        if not accs: await event.respond("❌ لا توجد حسابات")
-        else: await event.respond("🛡️ اختر حسابك:", buttons=[[Button.inline(n, k.encode())] for k, n in accs])
-        s["step"] = "choose_session"
-    elif d == b"temp":
+    if d == b"temp":
         s["step"] = "temp_phone"
-        await event.respond("📲 أرسل الرقم")
+        await event.respond("📲 أرسل الرقم مع رمز الدولة (مثال: +964xxx)")
     elif d == b"transfer_menu":
         await event.respond("قائمة النقل:", buttons=[
             [Button.inline("📤 نقل فردي", b"new_transfer")],
             [Button.inline("📦 نقل تجميعي", b"batch_transfer")],
-            [Button.inline("▶️ استكمال", b"resume")],
-            [Button.inline("🗑️ مسح الذاكرة", b"reset")]
+            [Button.inline("▶️ استكمال", b"resume")]
         ])
     elif d == b"new_transfer":
         s.update({"mode": "transfer", "step": "delay", "last_id": 0, "sent": 0})
-        await event.respond("⏱️ أرسل التأخير")
+        await event.respond("⏱️ أرسل التأخير بالثواني")
     elif d == b"batch_transfer":
         s.update({"mode": "batch_transfer", "step": "delay", "last_id": 0, "sent": 0})
         await event.respond("⏱️ أرسل التأخير")
     elif d == b"steal":
         s.update({"mode": "steal", "step": "steal_link", "last_id": 0, "sent": 0})
         await event.respond("🔗 أرسل رابط المصدر")
-    elif d == b"steal_protected":
-        s.update({"mode": "steal_protected", "step": "steal_link", "last_id": 0, "sent": 0})
-        await event.respond("🔓 أرسل رابط المصدر (المحمي)")
     elif d == b"stop":
         s["running"] = False
-    elif d == b"clear_temp":
-        for c in TEMP_SESSIONS.values(): 
-            try: await c.log_out()
-            except: pass
-        TEMP_SESSIONS.clear()
-        await event.respond("🧹 تم التنظيف")
 
 # ================= RUN LOGIC =================
 async def run(uid):
@@ -226,24 +211,18 @@ async def run(uid):
                     s["sent"] += 10
                     await s["status"].edit(f"📦 تجميعي: {s['sent']}")
                     batch.clear()
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(2)
                 continue
 
             await c.send_file(dst, m.video, caption=clean_caption(m.text))
             s["last_id"] = m.id
             s["sent"] += 1
             await s["status"].edit(f"📊 نقل: {s['sent']}")
-            
-            if s["mode"] == "transfer":
-                RECENT_CHANNELS[:] = [x for x in RECENT_CHANNELS if x["target"] != s["target"]]
-                RECENT_CHANNELS.insert(0, {"title": "Target", "target": s["target"], "last_id": s["last_id"], "sent": s["sent"]})
-                save_channels()
-            
             await asyncio.sleep(s.get("delay", 10))
 
         if batch: await c.send_file(dst, batch)
-        await s["status"].edit("✅ اكتمل!")
+        await s["status"].edit("✅ تم بنجاح")
     except Exception as e:
-        await bot.send_message(uid, f"❌ فشل: {e}")
+        await bot.send_message(uid, f"❌ حدث خطأ: {e}")
 
 bot.run_until_disconnected()
