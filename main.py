@@ -64,7 +64,7 @@ async def get_accounts():
                 pass
     return accs
 
-# ================= ROUTER =================
+# ================= MESSAGE ROUTER =================
 @bot.on(events.NewMessage)
 async def router(event):
     uid = event.sender_id
@@ -94,32 +94,46 @@ async def router(event):
 
     step = s.get("step")
 
+    # ===== TEMP LOGIN =====
     if step == "temp_phone":
         c = TelegramClient(StringSession(), API_ID, API_HASH)
         TEMP_SESSIONS[uid] = c
         await c.connect()
         sent = await c.send_code_request(text)
-        s.update({"client": c, "phone": text, "hash": sent.phone_code_hash, "step": "temp_code"})
+        s.update({
+            "client": c,
+            "phone": text,
+            "hash": sent.phone_code_hash,
+            "step": "temp_code"
+        })
         await event.respond("🔑 أرسل كود التحقق")
         return
 
     if step == "temp_code":
         try:
-            await s["client"].sign_in(phone=s["phone"], code=text, phone_code_hash=s["hash"])
+            await s["client"].sign_in(
+                phone=s["phone"],
+                code=text,
+                phone_code_hash=s["hash"]
+            )
         except SessionPasswordNeededError:
             s["step"] = "temp_2fa"
             await event.respond("🔐 أرسل رمز 2FA")
             return
+
         s["step"] = "main"
+        await event.respond("✅ تم تسجيل الدخول")
         await show_main_menu(event)
         return
 
     if step == "temp_2fa":
         await s["client"].sign_in(password=text)
         s["step"] = "main"
+        await event.respond("✅ تم تسجيل الدخول")
         await show_main_menu(event)
         return
 
+    # ===== TRANSFER =====
     if step == "delay":
         s["delay"] = int(text) if text.isdigit() else 10
         s["step"] = "target"
@@ -136,6 +150,7 @@ async def router(event):
         asyncio.create_task(run(uid))
         return
 
+    # ===== STEAL =====
     if step == "steal_link":
         s["source"] = text
         s["running"] = True
@@ -156,7 +171,10 @@ async def cb(event):
 
     if d == b"sessions":
         accs = await get_accounts()
-        await event.respond("🛡 الحسابات:", buttons=[[Button.inline(n, k.encode())] for k, n in accs])
+        await event.respond(
+            "🛡 الحسابات:",
+            buttons=[[Button.inline(n, k.encode())] for k, n in accs]
+        )
         s["step"] = "choose_session"
         return
 
@@ -196,7 +214,10 @@ async def cb(event):
     if d == b"resume":
         await event.respond(
             "اختر للاستكمال:",
-            buttons=[[Button.inline(f"{c['title']} ({c['sent']})", f"res_{i}".encode())] for i, c in enumerate(RECENT_CHANNELS)]
+            buttons=[
+                [Button.inline(f"{c['title']} ({c['sent']})", f"res_{i}".encode())]
+                for i, c in enumerate(RECENT_CHANNELS)
+            ]
         )
         return
 
@@ -204,7 +225,10 @@ async def cb(event):
         ch = RECENT_CHANNELS[int(d.decode().split("_")[1])]
         s.update(ch)
         s["running"] = True
-        s["status"] = await event.respond("▶️ استكمال...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
+        s["status"] = await event.respond(
+            "▶️ استكمال...",
+            buttons=[[Button.inline("⏹️ إيقاف", b"stop")]]
+        )
         asyncio.create_task(run(uid))
         return
 
