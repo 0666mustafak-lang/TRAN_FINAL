@@ -54,14 +54,16 @@ def clean_caption(txt):
 
 async def get_accounts():
     accs = []
+    await asyncio.sleep(1.5)
     for k in sorted(os.environ.keys()):
-        if k.startswith("TG_SESSION_"):
-            try:
-                async with TelegramClient(StringSession(os.environ[k]), API_ID, API_HASH) as c:
-                    me = await c.get_me()
-                    accs.append((k, me.first_name or me.username or "NoName"))
-            except:
-                pass
+        if not k.startswith("TG_SESSION_"):
+            continue
+        try:
+            async with TelegramClient(StringSession(os.environ[k]), API_ID, API_HASH) as c:
+                me = await c.get_me()
+                accs.append((k, me.first_name or me.username or "NoName"))
+        except:
+            pass
     return accs
 
 # ================= MESSAGE ROUTER =================
@@ -85,7 +87,7 @@ async def router(event):
         await event.respond(
             "اختر طريقة الدخول:",
             buttons=[
-                [Button.inline("🛡 الحسابات المحمية", b"sessions")],
+                [Button.inline("🛡 الحسابات المحمية (Session)", b"sessions")],
                 [Button.inline("📲 دخول مؤقت", b"temp")],
                 [Button.inline("🧹 تسجيل خروج المؤقت", b"clear_temp")]
             ]
@@ -94,7 +96,7 @@ async def router(event):
 
     step = s.get("step")
 
-    # ===== TEMP LOGIN =====
+    # ===== TEMP LOGIN (مثل الكود القديم حرفيًا) =====
     if step == "temp_phone":
         c = TelegramClient(StringSession(), API_ID, API_HASH)
         TEMP_SESSIONS[uid] = c
@@ -122,14 +124,12 @@ async def router(event):
             return
 
         s["step"] = "main"
-        await event.respond("✅ تم تسجيل الدخول")
         await show_main_menu(event)
         return
 
     if step == "temp_2fa":
         await s["client"].sign_in(password=text)
         s["step"] = "main"
-        await event.respond("✅ تم تسجيل الدخول")
         await show_main_menu(event)
         return
 
@@ -144,7 +144,7 @@ async def router(event):
         s["target"] = text
         s["running"] = True
         s["status"] = await event.respond(
-            "🚀 بدء العملية...",
+            "🚀 بدء النقل...",
             buttons=[[Button.inline("⏹️ إيقاف", b"stop")]]
         )
         asyncio.create_task(run(uid))
@@ -235,7 +235,7 @@ async def cb(event):
     if d == b"reset":
         RECENT_CHANNELS.clear()
         save_channels()
-        await event.respond("🗑️ تم إعادة الضبط")
+        await event.respond("🗑️ تم المسح")
         return
 
     if d == b"steal":
