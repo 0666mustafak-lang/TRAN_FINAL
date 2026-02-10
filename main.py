@@ -152,7 +152,6 @@ async def cb(event):
     if d == b"temp": s["step"] = "temp_phone"; await event.respond("📲 أرسل رقم الهاتف"); return
     if d == b"transfer_menu": await show_transfer_menu(event); return
     
-    # تفصيل خيارات النقل
     if d == b"new_transfer":
         s.update({"mode": "transfer", "step": "delay", "last_id": 0, "sent": 0})
         await event.respond("⏱️ أرسل التأخير للنقل العادي")
@@ -165,6 +164,10 @@ async def cb(event):
     if d == b"steal":
         s.update({"mode": "steal", "step": "steal_link", "last_id": 0, "sent": 0})
         await event.respond("🔗 أرسل رابط القناة للسرقة"); return
+    
+    if d == b"steal_protected":
+        s.update({"mode": "steal_protected", "step": "steal_link", "last_id": 0, "sent": 0})
+        await event.respond("🔓 أرسل رابط القناة المحمية"); return
 
     if d == b"stop": s["running"] = False
 
@@ -172,7 +175,8 @@ async def cb(event):
 async def show_main_menu(event):
     await event.respond("اختر العملية:", buttons=[
         [Button.inline("📤 النقل", b"transfer_menu")],
-        [Button.inline("⚡ السرقة (للحساب)", b"steal")],
+        [Button.inline("⚡ السرقة", b"steal")],
+        [Button.inline("🔓 السرقة المحمية", b"steal_protected")],
         [Button.inline("🧹 تنظيف الإدمن", b"clean_menu")]
     ])
 
@@ -199,25 +203,25 @@ async def run(uid):
         if not s["running"]: break
         if not m.video: continue
 
-        # --- النقل التجميعي أو السرقة (10 مقاطع سوياً) ---
-        if s["mode"] == "batch_transfer" or s["mode"] == "steal":
+        # المحرك التجميعي (للسرقة العادية، المحمية، والنقل التجميعي)
+        if s["mode"] in ["batch_transfer", "steal", "steal_protected"]:
             batch.append(m.video)
             if len(batch) == 10:
                 await c.send_file(dst, batch)
                 s["sent"] += 10
-                await s["status"].edit(f"📊 جاري {s['mode']}: {s['sent']} / {total}")
+                await s["status"].edit(f"📊 {s['mode']}: {s['sent']} / {total}")
                 batch.clear()
-                if s["mode"] == "batch_transfer": await asyncio.sleep(2) # تأخير خفيف للأمان
+                await asyncio.sleep(1.5)
             s["last_id"] = m.id
             continue 
 
-        # --- النقل العادي (مقطع مع وصف) ---
+        # النقل العادي
         await c.send_file(dst, m.video, caption=clean_caption(m.text))
         s["sent"] += 1; s["last_id"] = m.id
         await s["status"].edit(f"📊 نقل عادي: {s['sent']} / {total}")
         await asyncio.sleep(s.get("delay", 10))
 
-    if batch: # إرسال الباقي
+    if batch:
         await c.send_file(dst, batch)
         s["sent"] += len(batch)
     
