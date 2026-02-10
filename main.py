@@ -89,6 +89,7 @@ async def router(event):
             buttons=[
                 [Button.inline("🛡 الحسابات المحمية", b"sessions")],
                 [Button.inline("📲 دخول مؤقت", b"temp")],
+                [Button.inline("🔑 استخراج سيشن", b"extract_session")],
                 [Button.inline("🧹 تسجيل خروج المؤقت", b"clear_temp")]
             ]
         )
@@ -96,7 +97,6 @@ async def router(event):
 
     step = s.get("step")
 
-    # دخول مؤقت + استخراج سيشن
     if step == "temp_phone":
         if uid in TEMP_SESSIONS:
             try: await TEMP_SESSIONS[uid].disconnect()
@@ -119,13 +119,9 @@ async def router(event):
                 await event.respond(f"✅ تم استخراج السيشن بنجاح:\n\n`{s['raw_session']}`")
                 s["extract_mode"] = False
         except SessionPasswordNeededError:
-            s["step"] = "temp_2fa"
-            await event.respond("🔐 أرسل رمز 2FA")
-            return
+            s["step"] = "temp_2fa"; await event.respond("🔐 أرسل رمز 2FA"); return
         except Exception as e: await event.respond(f"❌ خطأ: {e}"); return
-        s["step"] = "main"
-        await show_main_menu_msg(uid)
-        return
+        s["step"] = "main"; await show_main_menu_msg(uid); return
 
     if step == "temp_2fa":
         try:
@@ -138,7 +134,6 @@ async def router(event):
         except Exception as e: await event.respond(f"❌ خطأ في الباسورد: {e}")
         return
 
-    # مدخلات النقل والسرقة
     if step == "delay":
         s["delay"] = int(text) if text.isdigit() else 10
         s["step"] = "target"; await event.respond("🔗 أرسل الهدف")
@@ -151,7 +146,7 @@ async def router(event):
 
     if step == "steal_link":
         s["source"] = text; s["running"] = True
-        s["status"] = await event.respond("⚡ بدء السرقة السريعة...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
+        s["status"] = await event.respond("⚡ بدء السرقة...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
         asyncio.create_task(run(uid)); return
 
 # ================= CALLBACKS =================
@@ -164,7 +159,7 @@ async def cb(event):
 
     if d == b"sessions":
         accs = await get_accounts()
-        if not accs: await event.respond("❌ لا توجد حسابات محمية"); return
+        if not accs: await event.respond("❌ لا توجد حسابات"); return
         await event.respond("🛡 الحسابات:", buttons=[[Button.inline(n, k.encode())] for k, n in accs])
         s["step"] = "choose_session"; return
 
@@ -176,6 +171,10 @@ async def cb(event):
         s["step"] = "main"; await show_main_menu_msg(uid); return
 
     if d == b"temp": s["step"] = "temp_phone"; await event.respond("📲 أرسل رقم الهاتف"); return
+
+    if d == b"extract_session":
+        s["extract_mode"] = True; s["step"] = "temp_phone"
+        await event.respond("📲 أرسل رقم الهاتف"); return
 
     if d == b"clear_temp":
         for c in TEMP_SESSIONS.values():
@@ -208,24 +207,21 @@ async def cb(event):
         await event.respond("🔗 أرسل رابط القناة"); return
     if d == b"steal_protected":
         s.update({"mode": "steal_protected", "step": "steal_link", "last_id": 0, "sent": 0})
-        await event.respond("🔗 أرسل رابط القناة (المحمية)"); return
+        await event.respond("🔗 أرسل رابط القناة"); return
 
     if d == b"clean_menu": asyncio.create_task(pyro_clean_logic(uid)); return
     if d.startswith(b"pclean_"):
         chat_id = int(d.decode().split("_")[1]); asyncio.create_task(start_cleaning_process(uid, chat_id)); return
-
-    if d == b"extract_session":
-        if s.get("raw_session"): await event.respond(f"✅ السيشن الحالي:\n\n`{s['raw_session']}`")
-        else: s["extract_mode"] = True; s["step"] = "temp_phone"; await event.respond("📲 أرسل رقم الهاتف للاستخراج:"); return
 
     if d == b"stop": s["running"] = False
 
 # ================= MENUS =================
 async def show_main_menu_msg(uid):
     await bot.send_message(uid, "اختر العملية:", buttons=[
-        [Button.inline("📤 النقل", b"transfer_menu"), Button.inline("⚡ السرقة", b"steal")],
-        [Button.inline("🔓 السرقة المحمية", b"steal_protected"), Button.inline("🧹 تنظيف الإدمن", b"clean_menu")],
-        [Button.inline("🔑 استخراج سيشن", b"extract_session")]
+        [Button.inline("📤 النقل", b"transfer_menu")],
+        [Button.inline("⚡ السرقة", b"steal")],
+        [Button.inline("🔓 السرقة المحمية", b"steal_protected")],
+        [Button.inline("🧹 تنظيف الإدمن", b"clean_menu")]
     ])
 
 async def show_transfer_menu(event):
@@ -240,7 +236,7 @@ async def show_transfer_menu(event):
 async def pyro_clean_logic(uid):
     s = state[uid]
     if not s.get("raw_session"): await bot.send_message(uid, "❌ سجل دخول أولاً"); return
-    load_msg = await bot.send_message(uid, "🔍 جاري فحص الإدمن...")
+    load_msg = await bot.send_message(uid, "🔍 جاري فحص المجموعات والقنوات..."); await asyncio.sleep(1)
     try:
         async with PyroClient(f"pyro_{uid}", API_ID, API_HASH, session_string=s["raw_session"]) as pc:
             btns = []
@@ -251,28 +247,28 @@ async def pyro_clean_logic(uid):
                         if m.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
                             btns.append([Button.inline(f"🧹 {d.chat.title}", f"pclean_{d.chat.id}".encode())])
                     except: continue
-            if btns: await load_msg.edit("✅ اختر القناة للتنظيف:", buttons=btns)
-            else: await load_msg.edit("❌ لست مشرفاً في أي قناة.")
+            if btns: await load_msg.edit("✅ اختر الدردشة لتنظيفها:", buttons=btns)
+            else: await load_msg.edit("❌ لا توجد مجموعات أنت مشرف فيها.")
     except Exception as e: await load_msg.edit(f"❌ خطأ: {e}")
 
 async def start_cleaning_process(uid, chat_id):
-    s = state[uid]; status = await bot.send_message(uid, "🚀 بدأ التنظيف...")
+    s = state[uid]; status = await bot.send_message(uid, "🚀 بدأت المعالجة...")
     try:
         async with PyroClient(f"p_ex_{uid}", API_ID, API_HASH, session_string=s["raw_session"]) as pc:
-            await status.edit("🔄 حذف رسائل الخدمة...")
+            await status.edit("🔄 جاري حذف رسائل الخدمة (انضمام/مغادرة) بسرعة...")
             s_ids = [m.id async for m in pc.get_chat_history(chat_id, limit=500) if m.service]
             if s_ids:
                 for i in range(0, len(s_ids), 100): await pc.delete_messages(chat_id, s_ids[i:i+100]); await asyncio.sleep(0.5)
-            await status.edit(f"✅ حذفت {len(s_ids)} رسالة.\n👤 جاري طرد الأعضاء...")
+            await status.edit(f"✅ تم حذف `{len(s_ids)}` رسالة خدمة.\n👤 جاري طرد الأعضاء (كل 2 ثانية)...")
             b_count = 0
             async for m in pc.get_chat_members(chat_id):
                 if m.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
                     try:
                         await pc.ban_chat_member(chat_id, m.user.id); b_count += 1
-                        if b_count % 5 == 0: await status.edit(f"📊 طردت: {b_count}")
+                        if b_count % 5 == 0: await status.edit(f"📊 التقدم الحالي:\n👤 مطرودين: `{b_count}`\n🗑 رسائل محذوفة: `{len(s_ids)}`")
                         await asyncio.sleep(2)
                     except: continue
-            await status.edit(f"✅ اكتمل التنظيف!\n👤 المطرودين: {b_count}\n📍 الحساب ما زال متصلاً.")
+            await status.edit(f"✅ اكتمل التنظيف!\n👤 المطرودين: `{b_count}`\n🗑 الرسائل: `{len(s_ids)}` \n👋 تم تأمين الحساب.")
     except Exception as e: await status.edit(f"❌ خطأ: {e}")
 
 # ================= RUN (TRANSFER & STEAL) =================
@@ -289,32 +285,27 @@ async def run(uid):
             if not s.get("running"): break
             if not m.video: continue
 
-            # --- سرعة السرقة القديمة ---
             if s["mode"].startswith("steal"):
                 if s["mode"] == "steal_protected":
                     file = await c.download_media(m.video, file=bytes); batch.append(file)
                 else: batch.append(m.video)
                 if len(batch) == 10:
                     await c.send_file(dst, batch); s["sent"] += 10
-                    await s["status"].edit(f"⚡ تم سرقة: {s['sent']}")
-                    batch.clear()
+                    await s["status"].edit(f"📊 تم سرقة: {s['sent']}"); batch.clear()
                 s["last_id"] = m.id
-                continue # تخطي الـ sleep للسرعة
+                continue 
 
-            # --- نظام النقل (تجميعي أو عادي) ---
             if s["mode"] == "batch_transfer":
                 batch.append(m.video)
                 if len(batch) == 10:
                     await c.send_file(dst, batch); s["sent"] += 10
-                    await s["status"].edit(f"📦 نقل تجميعي: {s['sent']}")
-                    batch.clear(); await asyncio.sleep(5)
+                    await s["status"].edit(f"📦 {s['sent']} مقطع"); batch.clear(); await asyncio.sleep(5)
                 s["last_id"] = m.id
             else:
                 await c.send_file(dst, m.video, caption=clean_caption(m.text))
                 s["last_id"] = m.id; s["sent"] += 1
-                await s["status"].edit(f"📊 نقل: {s['sent']}")
+                await s["status"].edit(f"📊 {s['sent']} مقطع")
 
-            # تحديث الذاكرة
             t_id = str(dst.id) if hasattr(dst, 'id') else s.get("target")
             RECENT_CHANNELS[:] = [x for x in RECENT_CHANNELS if x.get("target") != t_id]
             RECENT_CHANNELS.insert(0, {"title": getattr(dst,'title','Target'), "target": t_id, "last_id": s["last_id"], "sent": s["sent"], "mode": s["mode"], "delay": s.get("delay", 10)})
@@ -322,7 +313,7 @@ async def run(uid):
             await asyncio.sleep(s.get("delay", 10))
 
         if batch: await c.send_file(dst, batch); s["sent"] += len(batch)
-        await s["status"].edit(f"✅ اكتملت العملية بنجاح! ({s['sent']})")
+        await s["status"].edit(f"✅ اكتملت العملية")
     except Exception as e: await bot.send_message(uid, f"❌ خطأ: {e}")
 
 bot.run_until_disconnected()
