@@ -5,34 +5,22 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import SessionPasswordNeeded, FloodWait
 
-# --- CONFIG ---
-API_ID = os.getenv("API_ID")
+# --- الإعدادات الأساسية ---
+API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 AUTH_CODES = {"25864mnb00", "20002000"}
-AUTH_FILE = "authorized.txt"
+AUTHORIZED_USERS = set() 
 
-# تحميل المستخدمين المسموح لهم
-def load_authorized():
-    if os.path.exists(AUTH_FILE):
-        with open(AUTH_FILE, "r") as f:
-            return set(int(line.strip()) for line in f if line.strip().isdigit())
-    return set()
-
-AUTHORIZED_USERS = load_authorized()
-
-def save_authorized(uid):
-    AUTHORIZED_USERS.add(uid)
-    with open(AUTH_FILE, "a") as f:
-        f.write(f"{uid}\n")
-
-bot = Client("bot_session", api_id=int(API_ID), api_hash=API_HASH, bot_token=BOT_TOKEN)
+bot = Client("master_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user_data = {}
 
+# تنظيف الوصف من الروابط والمعرفات
 def clean_caption(txt):
     return re.sub(r'@\w+|https?://\S+', '', txt or '')
 
+# جلب الحسابات المحمية من ريلواي
 async def get_protected_accs():
     accs = []
     for k, v in os.environ.items():
@@ -49,8 +37,7 @@ async def start(client, message):
         return
     
     user_data[uid] = {"step": "idle"}
-    # القائمة الأصلية اللي طلبتها بالظبط
-    await message.reply("اختر طريقة الدخول:", 
+    await message.reply("📟 **مرحباً بك في النظام الشامل**\n\nاختر وسيلة الدخول:", 
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🛡 الحسابات المحمية", callback_data="sessions")],
             [InlineKeyboardButton("📲 دخول مؤقت", callback_data="temp_login")],
@@ -76,47 +63,50 @@ async def cb_handler(client: Client, query: CallbackQuery):
 
     elif data.startswith("load_"):
         sess_key = data.replace("load_", "")
-        s["user_client"] = Client(f"u_{uid}", api_id=int(API_ID), api_hash=API_HASH, session_string=os.getenv(sess_key))
+        s["user_client"] = Client(f"u_{uid}", api_id=API_ID, api_hash=API_HASH, session_string=os.getenv(sess_key))
         await s["user_client"].connect()
         await show_main_menu(query)
 
     elif data == "temp_login":
         s["step"] = "phone"
-        await query.edit_message_text("📲 أرسل رقم الهاتف:")
+        await query.edit_message_text("📲 أرسل رقم الهاتف (مثال +964...):")
 
     elif data == "extract_session":
-        await query.edit_message_text("🔑 ميزة استخراج السيشن قيد العمل...") # يمكنك ربطها بنفس منطق الدخول
+        if "user_client" not in s: return await query.answer("❌ سجل دخول أولاً!", show_alert=True)
+        sess_str = await s["user_client"].export_session_string()
+        await query.message.reply(f"🔑 **كود السيشن الخاص بك:**\n\n`{sess_str}`")
+        await query.answer("تم استخراج الكود بنجاح!")
     
     elif data == "clear_temp":
         if "user_client" in s:
             try: await s["user_client"].log_out()
             except: pass
         s.clear()
-        await query.edit_message_text("🧹 تم تسجيل الخروج ومسح الجلسة.")
+        await query.edit_message_text("🧹 تم تسجيل الخروج بنجاح.")
 
     elif data == "main_menu": await show_main_menu(query)
     
     elif data == "transfer_menu":
-        await query.edit_message_text("قائمة النقل:", reply_markup=InlineKeyboardMarkup([
+        await query.edit_message_text("📤 **قائمة النقل:**", reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("📝 نقل عادي (وصف)", callback_data="mode_normal")],
-            [InlineKeyboardButton("📦 نقل تجميعي (بدون وصف)", callback_data="mode_batch")],
-            [InlineKeyboardButton("🗑️ إعادة ضبط", callback_data="main_menu")]
+            [InlineKeyboardButton("📦 نقل تجميعي (10/10)", callback_data="mode_batch")],
+            [InlineKeyboardButton("🔙 عودة", callback_data="main_menu")]
         ]))
 
     elif data.startswith("mode_"):
         s["mode"] = data.split("_")[1]
         s["step"] = "get_delay"
-        await query.edit_message_text("⏱️ أرسل التأخير المطلوب:")
+        await query.edit_message_text("⏱️ أرسل التأخير (بالثواني):")
 
-    elif data == "steal":
+    elif data == "steal_fast":
         s.update({"mode": "steal", "delay": 0, "step": "get_source"})
-        await query.edit_message_text("⚡ أرسل رابط القناة:")
+        await query.edit_message_text("⚡ أرسل رابط القناة المصدر:")
     
     elif data == "steal_protected":
         s.update({"mode": "steal_protected", "delay": 0, "step": "get_source"})
         await query.edit_message_text("🔓 أرسل رابط القناة المحمية:")
 
-    elif data == "clean_menu":
+    elif data == "clean_admin":
         await show_admin_chats(client, query.message, s.get("user_client"))
 
     elif data.startswith("do_clean_"):
@@ -131,21 +121,20 @@ async def logic_handler(client, message: Message):
 
     if uid not in AUTHORIZED_USERS:
         if text in AUTH_CODES:
-            save_authorized(uid); await message.reply("✅ تم الدخول، أرسل /start")
+            AUTHORIZED_USERS.add(uid); await message.reply("✅ تم التفعيل! أرسل /start")
         else: await message.reply("🔐 أرسل رمز الدخول")
         return
 
-    if uid not in user_data: return
-    s = user_data[uid]
+    s = user_data.get(uid, {})
     step = s.get("step")
 
     if step == "phone":
-        temp = Client(f"u_{uid}", api_id=int(API_ID), api_hash=API_HASH)
+        temp = Client(f"u_{uid}", api_id=API_ID, api_hash=API_HASH)
         await temp.connect()
         try:
             sent_code = await temp.send_code(text.replace(" ", ""))
             s.update({"user_client": temp, "phone": text, "hash": sent_code.phone_code_hash, "step": "code"})
-            await message.reply("🔑 أرسل كود التحقق")
+            await message.reply("🔑 أرسل كود التحقق:")
         except Exception as e: await message.reply(f"❌ خطأ: {e}")
 
     elif step == "code":
@@ -153,7 +142,7 @@ async def logic_handler(client, message: Message):
             await s["user_client"].sign_in(s["phone"], s["hash"], text)
             await show_main_menu(message)
         except SessionPasswordNeeded:
-            s["step"] = "2fa"; await message.reply("🔐 أرسل رمز 2FA")
+            s["step"] = "2fa"; await message.reply("🔐 أرسل رمز 2FA:")
         except Exception as e: await message.reply(f"❌ خطأ: {e}")
 
     elif step == "2fa":
@@ -162,87 +151,90 @@ async def logic_handler(client, message: Message):
 
     elif step == "get_delay":
         s["delay"] = int(text) if text.isdigit() else 10
-        s["step"] = "get_target"; await message.reply("🔗 أرسل الهدف")
+        s["step"] = "get_target"; await message.reply("🔗 أرسل معرف القناة الهدف:")
 
     elif step == "get_target":
         s["target"] = text; s["running"] = True
-        s["status"] = await message.reply("🚀 بدء العملية...")
+        s["status"] = await message.reply("🚀 جاري البدء...")
         asyncio.create_task(run_transfer_engine(uid))
 
     elif step == "get_source":
         s["source"] = text; s["target"] = "me"; s["running"] = True
-        s["status"] = await message.reply("⚡ بدء السرقة...")
+        s["status"] = await message.reply("⚡ جاري السرقة...")
         asyncio.create_task(run_transfer_engine(uid))
 
 # --- ENGINES ---
 async def show_main_menu(obj):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📤 النقل", callback_data="transfer_menu")],
-        [InlineKeyboardButton("⚡ السرقة", callback_data="steal")],
+        [InlineKeyboardButton("⚡ السرقة السريعة", callback_data="steal_fast")],
         [InlineKeyboardButton("🔓 السرقة المحمية", callback_data="steal_protected")],
-        [InlineKeyboardButton("🧹 تنظيف الإدمن", callback_data="clean_menu")]
+        [InlineKeyboardButton("🧹 تنظيف الإدمن", callback_data="clean_admin")]
     ])
-    msg = "اختر العملية:"
-    if isinstance(obj, Message): await obj.reply(msg, reply_markup=kb)
-    else: await obj.edit_message_text(msg, reply_markup=kb)
+    if isinstance(obj, Message): await obj.reply("✅ القائمة الرئيسية:", reply_markup=kb)
+    else: await obj.edit_message_text("✅ القائمة الرئيسية:", reply_markup=kb)
 
 async def show_admin_chats(bot_client, message, user_client):
     buttons = []
     m = await message.reply("🔍 جاري الفحص...")
     async for dialog in user_client.get_dialogs():
         if dialog.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP, enums.ChatType.CHANNEL]:
-            if dialog.chat.permissions or dialog.chat.is_creator: # حل 271
+            if dialog.chat.permissions or dialog.chat.is_creator:
                 buttons.append([InlineKeyboardButton(f"🧹 {dialog.chat.title[:20]}", callback_data=f"do_clean_{dialog.chat.id}")])
-    if buttons: await m.edit("✅ اختر لتنظيفه:", reply_markup=InlineKeyboardMarkup(buttons))
-    else: await m.edit("❌ لا توجد قنوات إدمن")
+    if buttons: await m.edit("✅ اختر للتنظيف:", reply_markup=InlineKeyboardMarkup(buttons))
+    else: await m.edit("❌ لا توجد قنوات مشرف فيها.")
 
 async def run_transfer_engine(uid):
     s = user_data[uid]; uc = s["user_client"]
     mode, delay = s["mode"], s["delay"]
     src, dst = (s["source"], "me") if mode.startswith("steal") else ("me", s["target"])
     sent_count, batch = 0, []
+    
     async for msg in uc.get_chat_history(src):
         if not s.get("running"): break
         if not msg.video: continue
+        
         if mode in ["batch", "steal", "steal_protected"]:
             batch.append(msg.id)
             if len(batch) == 10:
-                await uc.copy_messages(dst, src, batch) # يرسل وينتظر الإرسال الفعلي
+                await uc.copy_messages(dst, src, batch)
                 sent_count += 10
                 await s["status"].edit(f"📊 التقدم: {sent_count}")
                 batch = []
-                if delay > 0: await asyncio.sleep(delay) # حل مشكلة الدفعتين المتتاليتين
+                if delay > 0: await asyncio.sleep(delay) # انتظار حقيقي بين الدفعات
         else:
             await uc.copy_messages(dst, src, msg.id, caption=clean_caption(msg.caption))
             sent_count += 1
             await s["status"].edit(f"📊 التقدم: {sent_count}")
             await asyncio.sleep(delay)
+            
     if batch: await uc.copy_messages(dst, src, batch)
-    await s["status"].edit(f"✅ اكتملت العملية: {sent_count}")
+    await s["status"].edit(f"✅ اكتملت العملية: {sent_count} مقطع")
 
 async def run_cleaning(client, callback_query, chat_id):
     uid = callback_query.from_user.id
     uc = user_data[uid]["user_client"]
-    status = await callback_query.edit_message_text("🔄 **جاري التنظيف...**")
-    try:
-        s_count = 0; service_msg_ids = []
-        async for message in uc.get_chat_history(chat_id, limit=500):
-            if message.service:
-                service_msg_ids.append(message.id); s_count += 1
-        if service_msg_ids:
-            for i in range(0, len(service_msg_ids), 100):
-                await uc.delete_messages(chat_id, service_msg_ids[i:i+100])
-                await asyncio.sleep(0.5)
-        
-        b_count = 0
-        async for member in uc.get_chat_members(chat_id):
-            if member.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
-                try:
-                    await uc.ban_chat_member(chat_id, member.user.id); b_count += 1
-                    if b_count % 5 == 0: await status.edit(f"📊 **التقدم:**\n👤 مطرودين: `{b_count}`\n🗑 رسائل: `{s_count}`")
-                    await asyncio.sleep(2) # تأخير آمن كما في كودك
-                except: continue
-        await status.edit(f"✅ اكتمل التنظيف!\n👤 المطرودين: `{b_count}`\n🗑 الرسائل: `{s_count}`")
-    except Exception as e: await status.edit(f"❌ خطأ: {e}")
+    status = await callback_query.edit_message_text("🔄 **جاري حذف رسائل الخدمة...**")
+    
+    s_count = 0; service_ids = []
+    async for message in uc.get_chat_history(chat_id, limit=500):
+        if message.service:
+            service_ids.append(message.id); s_count += 1
+            
+    if service_ids:
+        for i in range(0, len(service_ids), 100):
+            await uc.delete_messages(chat_id, service_ids[i:i+100])
+            await asyncio.sleep(0.5)
+            
+    await status.edit(f"✅ تم حذف `{s_count}` رسالة خدمة.\n👤 جاري طرد الأعضاء...")
+    b_count = 0
+    async for member in uc.get_chat_members(chat_id):
+        if member.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+            try:
+                await uc.ban_chat_member(chat_id, member.user.id); b_count += 1
+                if b_count % 5 == 0: await status.edit(f"📊 التقدم: 🧹 {s_count} | 👤 {b_count}")
+                await asyncio.sleep(2)
+            except: continue
+    await status.edit(f"✅ تم التنظيف: 🧹 {s_count} رسالة | 👤 {b_count} عضو")
 
 bot.run()
