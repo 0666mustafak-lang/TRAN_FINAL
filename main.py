@@ -58,7 +58,8 @@ async def router(event):
         await event.respond("📟 **مرحباً بك**", buttons=[
             [Button.inline("🛡 الحسابات المحمية", b"sessions")],
             [Button.inline("📲 دخول مؤقت", b"temp")],
-            [Button.inline("🔑 استخراج سيشن", b"extract_session")]
+            [Button.inline("🔑 استخراج سيشن", b"extract_session")],
+            [Button.inline("🧹 تسجيل خروج المؤقت", b"clear_temp")] # رجع الزر هنا
         ])
         return
 
@@ -116,16 +117,23 @@ async def cb(event):
         await s["client"].connect()
         await show_main_menu(event)
     elif d == b"temp": s["step"] = "temp_phone"; await event.respond("📲 أرسل الرقم")
+    elif d == b"clear_temp": # وظيفة تسجيل الخروج
+        if uid in TEMP_SESSIONS:
+            try: await TEMP_SESSIONS[uid].log_out()
+            except: pass
+            del TEMP_SESSIONS[uid]
+        s.clear()
+        await event.respond("🧹 تم تسجيل الخروج ومسح الجلسة.")
     elif d == b"transfer_menu": await show_transfer_menu(event)
     elif d in [b"new_transfer", b"batch_transfer"]:
-        s.update({"mode": "normal" if d == b"new_transfer" else "batch", "step": "delay", "sent": 0, "last_id": 0})
+        s.update({"mode": "transfer" if d == b"new_transfer" else "batch_transfer", "step": "delay", "sent": 0, "last_id": 0})
         await event.respond("⏱️ أرسل التأخير:")
     elif d == b"steal":
         s.update({"mode": "steal", "step": "steal_link", "sent": 0, "delay": 0, "last_id": 0})
         await event.respond("🔗 أرسل المصدر:")
     elif d == b"clean_menu":
         if not s.get("raw_session"): await event.respond("❌ سجل دخول أولاً"); return
-        lmsg = await event.respond("🔍 فحص القنوات...")
+        lmsg = await event.respond("🔍 جاري فحص القنوات...")
         async with PyroClient(f"p_{uid}", API_ID, API_HASH, session_string=s["raw_session"]) as pc:
             btns = []
             async for dialog in pc.get_dialogs():
@@ -149,8 +157,8 @@ async def show_main_menu(event):
 
 async def show_transfer_menu(event):
     await event.edit("📤 قائمة النقل:", buttons=[
-        [Button.inline("📝 نقل عادي", b"new_transfer")],
-        [Button.inline("📦 نقل تجميعي", b"batch_transfer")],
+        [Button.inline("📝 نقل عادي (وصف)", b"new_transfer")],
+        [Button.inline("📦 نقل تجميعي (10/10)", b"batch_transfer")],
         [Button.inline("🧹 تنظيف الإدمن", b"clean_menu")],
         [Button.inline("🗑️ إعادة ضبط", b"reset")]
     ])
@@ -158,32 +166,31 @@ async def show_transfer_menu(event):
 # ================= ENGINES =================
 async def run_engine(uid):
     s = state[uid]; client = s["client"]; mode = s["mode"]; delay = s["delay"]
-    src = s.get("source", "me"); dst = s.get("target", "me")
+    src = await client.get_entity(s.get("source", "me")); dst = s.get("target", "me")
     
-    # حساب العداد الكلي
     msgs = await client.get_messages(src, limit=0)
     total = msgs.total
-    sent_count, batch = 0, []
+    batch = []
 
     async for m in client.iter_messages(src, offset_id=s.get("last_id", 0), limit=None):
         if not s.get("running"): break
         if not m.video: continue
 
-        if mode == "batch" or mode == "steal":
+        if mode in ["batch_transfer", "steal"]:
             batch.append(m)
             if len(batch) == 10:
                 await client.send_file(dst, batch)
-                sent_count += 10; s["last_id"] = m.id; batch.clear()
-                await s["status"].edit(f"📊 التقدم ({mode}): {sent_count} / {total}")
-                if delay > 0 and mode == "batch": await asyncio.sleep(delay)
+                s["sent"] += 10; s["last_id"] = m.id; batch.clear()
+                await s["status"].edit(f"📊 {mode}: {s['sent']} / {total}")
+                if delay > 0 and mode == "batch_transfer": await asyncio.sleep(delay)
         else:
             await client.send_file(dst, m, caption=clean_caption(m.text))
-            sent_count += 1; s["last_id"] = m.id
-            await s["status"].edit(f"📊 التقدم (عادي): {sent_count} / {total}")
+            s["sent"] += 1; s["last_id"] = m.id
+            await s["status"].edit(f"📊 نقل عادي: {s['sent']} / {total}")
             if delay > 0: await asyncio.sleep(delay)
 
-    if batch and s.get("running"): await client.send_file(dst, batch); sent_count += len(batch)
-    await s["status"].edit(f"✅ اكتمل: {sent_count} / {total}")
+    if batch and s.get("running"): await client.send_file(dst, batch); s["sent"] += len(batch)
+    await s["status"].edit(f"✅ اكتمل: {s['sent']} / {total}")
 
 async def run_cleaning(event, chat_id, sess):
     status = await event.respond("🔄 جاري التنظيف...")
@@ -200,6 +207,6 @@ async def run_cleaning(event, chat_id, sess):
                     if b_count % 5 == 0: await status.edit(f"📊 طرد: {b_count}")
                     await asyncio.sleep(2)
                 except: continue
-        await status.edit(f"✅ اكتمل التنظيف: طرد {b_count}")
+        await status.edit(f"✅ تم التنظيف بنجاح.")
 
 bot.run_until_disconnected()
