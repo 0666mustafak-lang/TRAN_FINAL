@@ -63,6 +63,7 @@ async def router(event):
 
     step = s.get("step")
     
+    # استخراج سيشن (حساب جديد)
     if step == "ex_phone":
         c = TelegramClient(StringSession(), API_ID, API_HASH)
         s["ex_c"] = c; await c.connect()
@@ -81,6 +82,7 @@ async def router(event):
         await s["ex_c"].sign_in(password=text)
         await event.respond(f"✅ السيشن:\n`{s['ex_c'].session.save()}`"); await s["ex_c"].disconnect()
 
+    # الدخول للنقل والسرقة
     elif step == "temp_phone":
         c = TelegramClient(StringSession(), API_ID, API_HASH)
         s["client"] = c; await c.connect()
@@ -99,16 +101,17 @@ async def router(event):
         await s["client"].sign_in(password=text)
         s["raw_session"] = s["client"].session.save(); await show_main_menu(event)
 
+    # طلب المعلومات
     elif step == "delay":
         s["delay"] = int(text) if text.isdigit() else 10
         s["step"] = "target"; await event.respond("🔗 أرسل المعرف الهدف:", buttons=[[Button.inline("🔙 رجوع", b"transfer_menu")]])
     elif step == "target":
         s.update({"target": text, "running": True})
-        s["status"] = await event.respond("🚀 جاري التحقق والبدء...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
+        s["status"] = await event.respond("🚀 جاري البدء...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
         asyncio.create_task(run_engine(uid))
     elif step == "steal_link":
         s.update({"source": text, "target": "me", "running": True})
-        s["status"] = await event.respond("⚡ جاري التحقق والسرقة...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
+        s["status"] = await event.respond("⚡ جاري السرقة...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
         asyncio.create_task(run_engine(uid))
 
 # ================= CALLBACKS =================
@@ -189,10 +192,6 @@ async def run_engine(uid):
     src = s.get("source", "me"); dst = s.get("target", "me")
     batch = []
     
-    # جلب العدد الكلي للفيديوهات فقط للعداد
-    all_msgs = await client.get_messages(src, limit=0)
-    total = all_msgs.total
-
     async for m in client.iter_messages(src, offset_id=s.get("last_id", 0), reverse=True):
         if not s.get("running"): break
         if not m.video: continue
@@ -201,16 +200,15 @@ async def run_engine(uid):
             batch.append(m)
             if len(batch) == 10:
                 await client.send_file(dst, batch); s["sent"] += 10; s["last_id"] = m.id; batch.clear()
-                await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
+                await s["status"].edit(f"📊 Progress: {s['sent']}")
                 if mode == "batch": await asyncio.sleep(s["delay"])
         else:
             await client.send_file(dst, m, caption=clean_caption(m.text))
             s["sent"] += 1; s["last_id"] = m.id
-            await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
+            await s["status"].edit(f"📊 Progress: {s['sent']}")
             await asyncio.sleep(s["delay"])
-            
-    if batch and s.get("running"): await client.send_file(dst, batch); s["sent"] += len(batch); await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
-    await s["status"].edit(f"✅ اكتمل: {s['sent']} / {total}")
+    if batch and s.get("running"): await client.send_file(dst, batch); s["sent"] += len(batch); await s["status"].edit(f"📊 Progress: {s['sent']}")
+    await s["status"].edit(f"✅ اكتمل: {s['sent']}")
 
 async def run_pyro_clean(event, chat_id, session):
     status_msg = await event.respond("🔄 **جاري حذف رسائل الخدمة بسرعة...**")
