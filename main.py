@@ -32,9 +32,21 @@ def clean_caption(txt):
 
 async def get_accounts():
     accs = []
-    for k in sorted(os.environ.keys()):
-        if not k.startswith("TG_SESSION_"): continue
-        accs.append((k, k.replace("TG_SESSION_", "")))
+    # جلب المفاتيح المرتبطة بالسيشن فقط
+    session_keys = sorted([k for k in os.environ.keys() if k.startswith("TG_SESSION_")])
+    
+    for k in session_keys:
+        try:
+            # فحص الحساب للتأكد أنه شغال وجلب اسمه
+            temp_client = TelegramClient(StringSession(os.environ[k]), API_ID, API_HASH)
+            await temp_client.connect()
+            if await temp_client.is_user_authorized():
+                me = await temp_client.get_me()
+                name = me.first_name if me.first_name else k.replace("TG_SESSION_", "")
+                accs.append((k, name))
+            await temp_client.disconnect()
+        except:
+            continue # تخطي الحساب إذا كان معطلاً لتجنب التوقف
     return accs
 
 # ================= MESSAGE ROUTER =================
@@ -121,7 +133,6 @@ async def cb_handler(event):
     elif d == b"temp": s["step"] = "temp_phone"; await event.respond("📲 أرسل الرقم:")
     elif d == b"extract_session": s["step"] = "ex_phone"; await event.respond("🔑 أرسل الرقم:")
     
-    # --- إضافة كود خروج المؤقت ---
     elif d == b"clear_temp":
         if "client" in s:
             try: await s["client"].log_out()
@@ -132,10 +143,15 @@ async def cb_handler(event):
         await event.edit("✅ تم الخروج من الحساب المؤقت.")
 
     elif d == b"sessions":
+        wait_msg = await event.edit("🔍 جاري جلب الحسابات الشغالة...")
         accs = await get_accounts()
-        btns = [[Button.inline(n, f"load_{k}".encode())] for k, n in accs]
+        if not accs:
+            await wait_msg.edit("❌ لا توجد حسابات شغالة.", buttons=[[Button.inline("🔙 رجوع", b"back_start")]])
+            return
+        btns = [[Button.inline(f"👤 {n}", f"load_{k}".encode())] for k, n in accs]
         btns.append([Button.inline("🔙 رجوع", b"back_start")])
-        await event.edit("🛡 اختر الحساب:", buttons=btns)
+        await wait_msg.edit("🛡 اختر الحساب:", buttons=btns)
+
     elif d == b"back_start":
         await event.edit("📟 النظام:", buttons=[[Button.inline("🛡 الحسابات", b"sessions")],[Button.inline("📲 دخول مؤقت", b"temp")],[Button.inline("🔑 استخراج", b"extract_session")],[Button.inline("🧹 خروج المؤقت", b"clear_temp")]])
 
@@ -199,7 +215,6 @@ async def run_engine(uid):
     src = s.get("source", "me"); dst = s.get("target", "me")
     batch = []
     
-    # محاولة جلب التوتال مع تفادي تعليق القنوات العملاقة
     try:
         m_info = await client.get_messages(src, limit=0)
         total = m_info.total
