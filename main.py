@@ -4,105 +4,124 @@ import re
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError as Telethon2FA
-from pyrogram import Client as PyroClient, enums, filters
-from pyrogram.errors import SessionPasswordNeeded as Pyro2FA
+from pyrogram import Client as PyroClient, enums
 
-# --- إعدادات البيئة ---
+# ================= CONFIG =================
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
-# --- إعداد البوت الأساسي (Telethon) ---
+# نظام الرمز الذي طلبته (لم يتم حذفه)
+AUTH_CODES = {"25864mnb00", "20002000"}
+AUTH_FILE = "authorized.txt"
+
+def load_authorized():
+    if os.path.exists(AUTH_FILE):
+        with open(AUTH_FILE) as f:
+            try: return set(map(int, f.read().splitlines()))
+            except: return set()
+    return set()
+
+AUTHORIZED_USERS = load_authorized()
+
+# ================= BOT =================
 bot = TelegramClient("bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 state = {}
 
-# دالة تنظيف الكابشن
 def clean_caption(txt):
     return re.sub(r'@\w+|https?://\S+', '', txt or '')
 
-# --- القوائم الرئيسية ---
-async def show_main_menu(event):
-    btns = [
-        [Button.inline("📤 النقل", b"transfer_menu")],
-        [Button.inline("⚡ السرقة", b"steal"), Button.inline("🔓 السرقة المحمية", b"steal_protected")]
-    ]
-    if isinstance(event, events.CallbackQuery): await event.edit("✅ خيارات الحساب:", buttons=btns)
-    else: await event.respond("✅ خيارات الحساب:", buttons=btns)
+async def get_accounts():
+    accs = []
+    for k in sorted(os.environ.keys()):
+        if not k.startswith("TG_SESSION_"): continue
+        accs.append((k, k.replace("TG_SESSION_", "")))
+    return accs
 
-async def show_transfer_menu(event):
-    btns = [
-        [Button.inline("📝 عادي", b"new_transfer"), Button.inline("⏯️ استكمال", b"resume_normal")],
-        [Button.inline("📦 تجميعي", b"batch_transfer"), Button.inline("⏯️ استكمال", b"resume_batch")],
-        [Button.inline("🧹 تنظيف الإدمن", b"clean_menu")],
-        [Button.inline("🗑️ ضبط", b"reset"), Button.inline("🔙 رجوع", b"main_menu")]
-    ]
-    await event.edit("📤 قائمة النقل والتنظيف:", buttons=btns)
-
-# --- معالج الرسائل (Telethon) ---
-@bot.on(events.NewMessage(pattern="/start"))
-async def start(event):
-    state[event.sender_id] = {}
-    await event.respond("📟 **مرحباً بك في النظام المتكامل**", buttons=[
-        [Button.inline("🛡 الحسابات المحمية", b"sessions")],
-        [Button.inline("📲 دخول مؤقت", b"temp")],
-        [Button.inline("🔑 استخراج سيشن (جديد)", b"extract_session")],
-        [Button.inline("🧹 تسجيل خروج المؤقت", b"clear_temp")]
-    ])
-
+# ================= MESSAGE ROUTER =================
 @bot.on(events.NewMessage)
-async def handle_text(event):
+async def router(event):
     uid = event.sender_id
-    if uid not in state or event.text.startswith("/"): return
-    s = state[uid]
-    step = s.get("step")
+    text = (event.text or "").strip()
+    s = state.setdefault(uid, {})
 
-    # منطق تسجيل الدخول (Telethon) للنقل والسرقة
-    if step == "temp_phone":
+    # التحقق من الرمز (نفس نظامك الأصلي)
+    if uid not in AUTHORIZED_USERS:
+        if text in AUTH_CODES:
+            AUTHORIZED_USERS.add(uid)
+            with open(AUTH_FILE, "a") as f: f.write(f"{uid}\n")
+            await event.respond("✅ تم الدخول بنجاح، أرسل /start")
+        else:
+            await event.respond("🔐 أرسل رمز الدخول الخاص بالنظام:")
+        return
+
+    if text == "/start":
+        await event.respond("📟 **مرحباً بك في النظام المتكامل**", buttons=[
+            [Button.inline("🛡 الحسابات المحمية", b"sessions")],
+            [Button.inline("📲 دخول مؤقت", b"temp")],
+            [Button.inline("🔑 استخراج سيشن (جديد)", b"extract_session")],
+            [Button.inline("🧹 تسجيل خروج المؤقت", b"clear_temp")]
+        ])
+        return
+
+    step = s.get("step")
+    
+    # استخراج سيشن جديد (نظام مستقل)
+    if step == "ex_phone":
+        c = TelegramClient(StringSession(), API_ID, API_HASH)
+        s["ex_c"] = c; await c.connect()
+        try:
+            sent = await c.send_code_request(text)
+            s.update({"ex_p": text, "ex_h": sent.phone_code_hash, "step": "ex_code"})
+            await event.respond("🔑 أرسل كود الاستخراج:")
+        except Exception as e: await event.respond(f"❌ خطأ: {e}")
+    elif step == "ex_code":
+        try:
+            await s["ex_c"].sign_in(s["ex_p"], text, phone_code_hash=s["ex_h"])
+            await event.respond(f"✅ السيشن المستخرج:\n\n`{s['ex_c'].session.save()}`")
+            await s["ex_c"].disconnect(); s["step"] = "main"
+        except Telethon2FA:
+            s["step"] = "ex_2fa"; await event.respond("🔐 أرسل رمز 2FA:")
+    elif step == "ex_2fa":
+        await s["ex_c"].sign_in(password=text)
+        await event.respond(f"✅ السيشن المستخرج:\n\n`{s['ex_c'].session.save()}`")
+        await s["ex_c"].disconnect(); s["step"] = "main"
+
+    # الدخول المؤقت للنقل والسرقة
+    elif step == "temp_phone":
         c = TelegramClient(StringSession(), API_ID, API_HASH)
         s["client"] = c; await c.connect()
         try:
-            sent = await c.send_code_request(event.text)
-            s.update({"phone": event.text, "hash": sent.phone_code_hash, "step": "temp_code"})
+            sent = await c.send_code_request(text)
+            s.update({"phone": text, "hash": sent.phone_code_hash, "step": "temp_code"})
             await event.respond("🔐 أرسل كود التحقق:")
         except Exception as e: await event.respond(f"❌ خطأ: {e}")
-    
     elif step == "temp_code":
         try:
-            await s["client"].sign_in(s["phone"], event.text, phone_code_hash=s["hash"])
+            await s["client"].sign_in(s["phone"], text, phone_code_hash=s["hash"])
             s["raw_session"] = s["client"].session.save()
             await show_main_menu(event)
         except Telethon2FA:
-            s["step"] = "temp_2fa"; await event.respond("🔐 أرسل رمز التحقق بخطوتين:")
-        except Exception as e: await event.respond(f"❌ خطأ: {e}")
+            s["step"] = "temp_2fa"; await event.respond("🔐 أرسل رمز 2FA:")
+    elif step == "temp_2fa":
+        await s["client"].sign_in(password=text)
+        s["raw_session"] = s["client"].session.save()
+        await show_main_menu(event)
 
-    # منطق استخراج سيشن (جديد)
-    elif step == "ex_phone":
-        c = TelegramClient(StringSession(), API_ID, API_HASH)
-        s["ex_c"] = c; await c.connect()
-        sent = await c.send_code_request(event.text)
-        s.update({"ex_p": event.text, "ex_h": sent.phone_code_hash, "step": "ex_code"})
-        await event.respond("🔑 أرسل كود الاستخراج:")
-    
-    elif step == "ex_code":
-        await s["ex_c"].sign_in(s["ex_p"], event.text, phone_code_hash=s["ex_h"])
-        await event.respond(f"✅ السيشن المستخرج:\n\n`{s['ex_c'].session.save()}`")
-
-    # إدخال روابط السرقة والنقل
+    # طلب الروابط والهدف
     elif step == "delay":
-        s["delay"] = int(event.text) if event.text.isdigit() else 10
+        s["delay"] = int(text) if text.isdigit() else 10
         s["step"] = "target"; await event.respond("🔗 أرسل معرف القناة الهدف:", buttons=[[Button.inline("🔙 رجوع", b"transfer_menu")]])
-    
     elif step == "target":
-        s.update({"target": event.text, "running": True})
+        s.update({"target": text, "running": True})
         s["status"] = await event.respond("🚀 جاري البدء...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
         asyncio.create_task(run_engine(uid))
-
     elif step == "steal_link":
-        s.update({"source": event.text, "target": "me", "running": True})
+        s.update({"source": text, "target": "me", "running": True})
         s["status"] = await event.respond("⚡ جاري السرقة...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
         asyncio.create_task(run_engine(uid))
 
-# --- معالج الكولباك (Callbacks) ---
+# ================= CALLBACKS =================
 @bot.on(events.CallbackQuery)
 async def cb_handler(event):
     uid = event.sender_id
@@ -114,6 +133,21 @@ async def cb_handler(event):
     elif d == b"temp": s["step"] = "temp_phone"; await event.respond("📲 أرسل رقم الهاتف:")
     elif d == b"extract_session": s["step"] = "ex_phone"; await event.respond("🔑 أرسل الرقم لاستخراج السيشن:")
     
+    elif d == b"sessions":
+        accs = await get_accounts()
+        btns = [[Button.inline(n, f"load_{k}".encode())] for k, n in accs]
+        btns.append([Button.inline("🔙 رجوع للبداية", b"back_to_start")])
+        await event.edit("🛡 اختر الحساب:", buttons=btns)
+    elif d == b"back_to_start":
+        await event.edit("📟 **مرحباً بك**", buttons=[[Button.inline("🛡 الحسابات المحمية", b"sessions")],[Button.inline("📲 دخول مؤقت", b"temp")],[Button.inline("🔑 استخراج سيشن (جديد)", b"extract_session")],[Button.inline("🧹 تسجيل خروج المؤقت", b"clear_temp")]])
+
+    elif d.startswith(b"load_"):
+        sess_key = d.decode().replace("load_", "")
+        s["raw_session"] = os.environ[sess_key]
+        s["client"] = TelegramClient(StringSession(s["raw_session"]), API_ID, API_HASH)
+        await s["client"].connect()
+        await show_main_menu(event)
+
     elif d in [b"new_transfer", b"batch_transfer"]:
         s.update({"mode": "normal" if d == b"new_transfer" else "batch", "step": "delay", "sent": 0, "last_id": 0})
         await event.edit("⏱️ أرسل وقت التأخير:", buttons=[[Button.inline("🔙 رجوع", b"transfer_menu")]])
@@ -132,8 +166,7 @@ async def cb_handler(event):
 
     elif d == b"clean_menu":
         if "raw_session" not in s: return await event.answer("❌ سجل دخول أولاً!", alert=True)
-        # تشغيل Pyrogram لجلب القنوات
-        await event.answer("🔍 جاري الفحص...")
+        await event.answer("🔍 جاري جلب القنوات للتنظيف...")
         async with PyroClient(f"pyro_{uid}", API_ID, API_HASH, session_string=s["raw_session"]) as pc:
             btns = []
             async for dialog in pc.get_dialogs(limit=50):
@@ -153,32 +186,22 @@ async def cb_handler(event):
     elif d == b"stop": s["running"] = False; await event.answer("🛑 تم الإيقاف")
     elif d == b"reset": s.update({"sent": 0, "last_id": 0}); await event.answer("🗑️ تم التصفير")
 
-# --- محرك التنظيف (Pyrogram) ---
-async def run_pyro_clean(event, chat_id, session):
-    msg = await event.respond("🔄 **جاري بدء التنظيف (بايروغرام)...**")
-    async with PyroClient(f"cleaner_{event.sender_id}", API_ID, API_HASH, session_string=session) as pc:
-        # 1. حذف رسائل الخدمة
-        s_count = 0
-        service_ids = [m.id async for m in pc.get_chat_history(chat_id, limit=300) if m.service]
-        if service_ids:
-            await pc.delete_messages(chat_id, service_ids)
-            s_count = len(service_ids)
-        
-        await msg.edit(f"🗑 تم حذف {s_count} رسالة خدمة..\n👤 جاري طرد الأعضاء...")
-        
-        # 2. طرد الأعضاء
-        b_count = 0
-        async for member in pc.get_chat_members(chat_id):
-            if member.status not in [enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR]:
-                try:
-                    await pc.ban_chat_member(chat_id, member.user.id)
-                    b_count += 1
-                    if b_count % 10 == 0: await msg.edit(f"📊 طرد: {b_count} | خدمة: {s_count}")
-                    await asyncio.sleep(1) # آمن
-                except: continue
-        await msg.edit(f"✅ **اكتمل التنظيف!**\n\n👤 المطرودين: {b_count}\n🗑 رسائل الخدمة: {s_count}")
+# ================= MENUS =================
+async def show_main_menu(event):
+    btns = [[Button.inline("📤 النقل", b"transfer_menu")], [Button.inline("⚡ السرقة", b"steal"), Button.inline("🔓 السرقة المحمية", b"steal_protected")]]
+    if isinstance(event, events.CallbackQuery): await event.edit("✅ خيارات الحساب:", buttons=btns)
+    else: await event.respond("✅ خيارات الحساب:", buttons=btns)
 
-# --- محرك النقل (Telethon) ---
+async def show_transfer_menu(event):
+    btns = [
+        [Button.inline("📝 عادي", b"new_transfer"), Button.inline("⏯️ استكمال", b"resume_normal")],
+        [Button.inline("📦 تجميعي", b"batch_transfer"), Button.inline("⏯️ استكمال", b"resume_batch")],
+        [Button.inline("🧹 تنظيف الإدمن", b"clean_menu")],
+        [Button.inline("🗑️ ضبط", b"reset"), Button.inline("🔙 رجوع", b"main_menu")]
+    ]
+    await event.edit("📤 قائمة النقل والتنظيف:", buttons=btns)
+
+# ================= ENGINES =================
 async def run_engine(uid):
     s = state[uid]; client = s["client"]; mode = s["mode"]
     src = s.get("source", "me"); dst = s.get("target", "me")
@@ -200,9 +223,27 @@ async def run_engine(uid):
             s["sent"] += 1; s["last_id"] = m.id
             await s["status"].edit(f"📊 عادي: {s['sent']}")
             await asyncio.sleep(s["delay"])
-            
     if batch and s.get("running"): await client.send_file(dst, batch)
-    await s.get("status").edit("✅ اكتملت العملية!")
+    await s["status"].edit("✅ اكتملت العملية!")
 
-print("✅ النظام يعمل الآن...")
+async def run_pyro_clean(event, chat_id, session):
+    msg = await event.respond("🔄 **جاري بدء التنظيف (بايروغرام)...**")
+    try:
+        async with PyroClient(f"cleaner_{event.sender_id}", API_ID, API_HASH, session_string=session) as pc:
+            service_ids = [m.id async for m in pc.get_chat_history(chat_id, limit=500) if m.service]
+            if service_ids:
+                for i in range(0, len(service_ids), 100):
+                    await pc.delete_messages(chat_id, service_ids[i:i+100])
+            
+            b_count = 0
+            async for member in pc.get_chat_members(chat_id):
+                if member.status not in [enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR]:
+                    try:
+                        await pc.ban_chat_member(chat_id, member.user.id); b_count += 1
+                        if b_count % 10 == 0: await msg.edit(f"📊 طرد: {b_count}")
+                        await asyncio.sleep(2)
+                    except: continue
+            await msg.edit(f"✅ **اكتمل التنظيف!**\n👤 المطرودين: {b_count}\n🗑 خدمة: {len(service_ids)}")
+    except Exception as e: await msg.edit(f"❌ خطأ: {e}")
+
 bot.run_until_disconnected()
