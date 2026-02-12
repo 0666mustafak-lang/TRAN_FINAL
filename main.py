@@ -4,7 +4,7 @@ import re
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError as Telethon2FA
-from pyrogram import Client as PyroClient, enums # المكتبة المطلوبة للتنظيف
+from pyrogram import Client as PyroClient, enums
 
 # ================= CONFIG =================
 API_ID = int(os.environ["API_ID"])
@@ -63,7 +63,6 @@ async def router(event):
 
     step = s.get("step")
     
-    # استخراج سيشن (حساب جديد)
     if step == "ex_phone":
         c = TelegramClient(StringSession(), API_ID, API_HASH)
         s["ex_c"] = c; await c.connect()
@@ -82,7 +81,6 @@ async def router(event):
         await s["ex_c"].sign_in(password=text)
         await event.respond(f"✅ السيشن:\n`{s['ex_c'].session.save()}`"); await s["ex_c"].disconnect()
 
-    # الدخول للنقل والسرقة
     elif step == "temp_phone":
         c = TelegramClient(StringSession(), API_ID, API_HASH)
         s["client"] = c; await c.connect()
@@ -101,7 +99,6 @@ async def router(event):
         await s["client"].sign_in(password=text)
         s["raw_session"] = s["client"].session.save(); await show_main_menu(event)
 
-    # طلب المعلومات
     elif step == "delay":
         s["delay"] = int(text) if text.isdigit() else 10
         s["step"] = "target"; await event.respond("🔗 أرسل المعرف الهدف:", buttons=[[Button.inline("🔙 رجوع", b"transfer_menu")]])
@@ -124,13 +121,23 @@ async def cb_handler(event):
     elif d == b"temp": s["step"] = "temp_phone"; await event.respond("📲 أرسل الرقم:")
     elif d == b"extract_session": s["step"] = "ex_phone"; await event.respond("🔑 أرسل الرقم:")
     
+    # --- إضافة كود خروج المؤقت ---
+    elif d == b"clear_temp":
+        if "client" in s:
+            try: await s["client"].log_out()
+            except: pass
+            del s["client"]
+        if "raw_session" in s: del s["raw_session"]
+        s["step"] = None
+        await event.edit("✅ تم الخروج من الحساب المؤقت.")
+
     elif d == b"sessions":
         accs = await get_accounts()
         btns = [[Button.inline(n, f"load_{k}".encode())] for k, n in accs]
         btns.append([Button.inline("🔙 رجوع", b"back_start")])
         await event.edit("🛡 اختر الحساب:", buttons=btns)
     elif d == b"back_start":
-        await event.edit("📟 النظام:", buttons=[[Button.inline("🛡 الحسابات", b"sessions")],[Button.inline("📲 دخول مؤقت", b"temp")],[Button.inline("🔑 استخراج", b"extract_session")]])
+        await event.edit("📟 النظام:", buttons=[[Button.inline("🛡 الحسابات", b"sessions")],[Button.inline("📲 دخول مؤقت", b"temp")],[Button.inline("🔑 استخراج", b"extract_session")],[Button.inline("🧹 خروج المؤقت", b"clear_temp")]])
 
     elif d.startswith(b"load_"):
         key = d.decode().replace("load_", "")
@@ -192,6 +199,12 @@ async def run_engine(uid):
     src = s.get("source", "me"); dst = s.get("target", "me")
     batch = []
     
+    # محاولة جلب التوتال مع تفادي تعليق القنوات العملاقة
+    try:
+        m_info = await client.get_messages(src, limit=0)
+        total = m_info.total
+    except: total = "???"
+
     async for m in client.iter_messages(src, offset_id=s.get("last_id", 0), reverse=True):
         if not s.get("running"): break
         if not m.video: continue
@@ -200,15 +213,18 @@ async def run_engine(uid):
             batch.append(m)
             if len(batch) == 10:
                 await client.send_file(dst, batch); s["sent"] += 10; s["last_id"] = m.id; batch.clear()
-                await s["status"].edit(f"📊 Progress: {s['sent']}")
+                await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
                 if mode == "batch": await asyncio.sleep(s["delay"])
         else:
             await client.send_file(dst, m, caption=clean_caption(m.text))
             s["sent"] += 1; s["last_id"] = m.id
-            await s["status"].edit(f"📊 Progress: {s['sent']}")
+            await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
             await asyncio.sleep(s["delay"])
-    if batch and s.get("running"): await client.send_file(dst, batch); s["sent"] += len(batch); await s["status"].edit(f"📊 Progress: {s['sent']}")
-    await s["status"].edit(f"✅ اكتمل: {s['sent']}")
+            
+    if batch and s.get("running"): 
+        await client.send_file(dst, batch); s["sent"] += len(batch)
+        await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
+    await s["status"].edit(f"✅ اكتمل: {s['sent']} / {total}")
 
 async def run_pyro_clean(event, chat_id, session):
     status_msg = await event.respond("🔄 **جاري حذف رسائل الخدمة بسرعة...**")
