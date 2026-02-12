@@ -3,8 +3,7 @@ import asyncio
 import re
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError as Telethon2FA
-from pyrogram import Client as PyroClient, enums
+from telethon.errors import SessionPasswordNeededError
 
 # ================= CONFIG =================
 API_ID = int(os.environ["API_ID"])
@@ -37,6 +36,23 @@ async def get_accounts():
         accs.append((k, k.replace("TG_SESSION_", "")))
     return accs
 
+# ================= MENUS =================
+async def show_main_menu(event):
+    btns = [
+        [Button.inline("📤 النقل", b"transfer_menu")],
+        [Button.inline("⚡ السرقة", b"steal"), Button.inline("🔓 السرقة المحمية", b"steal_protected")]
+    ]
+    if isinstance(event, events.CallbackQuery): await event.edit("✅ خيارات الحساب:", buttons=btns)
+    else: await event.respond("✅ خيارات الحساب:", buttons=btns)
+
+async def show_transfer_menu(event):
+    btns = [
+        [Button.inline("📝 عادي", b"new_transfer"), Button.inline("⏯️ استكمال", b"resume_normal")],
+        [Button.inline("📦 تجميعي", b"batch_transfer"), Button.inline("⏯️ استكمال", b"resume_batch")],
+        [Button.inline("🗑️ ضبط", b"reset"), Button.inline("🔙 رجوع", b"main_menu")]
+    ]
+    await event.edit("📤 قائمة النقل:", buttons=btns)
+
 # ================= MESSAGE ROUTER =================
 @bot.on(events.NewMessage)
 async def router(event):
@@ -53,7 +69,7 @@ async def router(event):
         return
 
     if text == "/start":
-        await event.respond("📟 **نظام التحكم المتكامل**", buttons=[
+        await event.respond("📟 **نظام التحكم الأصلي**", buttons=[
             [Button.inline("🛡 الحسابات المحمية", b"sessions")],
             [Button.inline("📲 دخول مؤقت", b"temp")],
             [Button.inline("🔑 استخراج سيشن (جديد)", b"extract_session")],
@@ -75,7 +91,7 @@ async def router(event):
         try:
             await s["client"].sign_in(s["phone"], text, phone_code_hash=s["hash"])
             s["raw_session"] = s["client"].session.save(); await show_main_menu(event)
-        except Telethon2FA:
+        except SessionPasswordNeededError:
             s["step"] = "temp_2fa"; await event.respond("🔐 رمز 2FA:")
     elif step == "temp_2fa":
         await s["client"].sign_in(password=text)
@@ -90,7 +106,7 @@ async def router(event):
         asyncio.create_task(run_engine(uid))
     elif step == "steal_link":
         s.update({"source": text, "target": "me", "running": True})
-        s["status"] = await event.respond("⚡ جاري فحص المصدر والسرقة...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
+        s["status"] = await event.respond("⚡ جاري البدء بالسرقة...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
         asyncio.create_task(run_engine(uid))
 
 # ================= CALLBACKS =================
@@ -101,7 +117,6 @@ async def cb_handler(event):
     if d == b"main_menu": await show_main_menu(event)
     elif d == b"transfer_menu": await show_transfer_menu(event)
     elif d == b"temp": s["step"] = "temp_phone"; await event.respond("📲 أرسل الرقم:")
-    elif d == b"extract_session": s["step"] = "ex_phone"; await event.respond("🔑 أرسل الرقم:")
     
     elif d == b"sessions":
         accs = await get_accounts()
@@ -109,7 +124,7 @@ async def cb_handler(event):
         btns.append([Button.inline("🔙 رجوع", b"back_start")])
         await event.edit("🛡 اختر الحساب:", buttons=btns)
     elif d == b"back_start":
-        await event.edit("📟 النظام:", buttons=[[Button.inline("🛡 الحسابات", b"sessions")],[Button.inline("📲 دخول مؤقت", b"temp")],[Button.inline("🔑 استخراج", b"extract_session")]])
+        await event.edit("📟 النظام:", buttons=[[Button.inline("🛡 الحسابات", b"sessions")],[Button.inline("📲 دخول مؤقت", b"temp")]])
 
     elif d.startswith(b"load_"):
         key = d.decode().replace("load_", "")
@@ -119,7 +134,7 @@ async def cb_handler(event):
 
     elif d in [b"new_transfer", b"batch_transfer"]:
         s.update({"mode": "normal" if d == b"new_transfer" else "batch", "step": "delay", "sent": 0, "last_id": 0})
-        await event.edit("⏱️ أرسل التأخير:", buttons=[[Button.inline("🔙 رجوع", b"transfer_menu")]])
+        await event.edit("⏱️ أرسل وقت التأخير:", buttons=[[Button.inline("🔙 رجوع", b"transfer_menu")]])
     
     elif d in [b"resume_normal", b"resume_batch"]:
         s.update({"mode": "normal" if d == b"resume_normal" else "batch", "step": "delay"})
@@ -127,50 +142,20 @@ async def cb_handler(event):
 
     elif d == b"steal":
         s.update({"mode": "steal", "step": "steal_link", "sent": 0, "last_id": 0})
-        await event.edit("⚡ أرسل المصدر:", buttons=[[Button.inline("🔙 رجوع", b"main_menu")]])
+        await event.edit("⚡ أرسل المصدر للسرقة:", buttons=[[Button.inline("🔙 رجوع", b"main_menu")]])
 
     elif d == b"steal_protected":
         s.update({"mode": "steal_protected", "step": "steal_link", "sent": 0, "last_id": 0})
         await event.edit("🔓 أرسل المصدر المحمي:", buttons=[[Button.inline("🔙 رجوع", b"main_menu")]])
 
-    elif d == b"clean_menu":
-        if "raw_session" not in s: return await event.answer("❌ سجل دخول أولاً", alert=True)
-        lmsg = await event.respond("🔍 جاري جلب القنوات للتنظيف...")
-        async with PyroClient(f"p_{uid}", API_ID, API_HASH, session_string=s["raw_session"]) as pc:
-            btns = []
-            async for dialog in pc.get_dialogs(limit=50):
-                if dialog.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP, enums.ChatType.CHANNEL]:
-                    try:
-                        m = await pc.get_chat_member(dialog.chat.id, "me")
-                        if m.status in [enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR]:
-                            btns.append([Button.inline(f"🧹 {dialog.chat.title[:20]}", f"cln_{dialog.chat.id}".encode())])
-                    except: continue
-            btns.append([Button.inline("🔙 رجوع", b"transfer_menu")])
-            await lmsg.edit("✅ اختر الدردشة:", buttons=btns)
-
-    elif d.startswith(b"cln_"):
-        cid = int(d.decode().split("_")[1])
-        asyncio.create_task(run_pyro_clean(event, cid, s["raw_session"]))
-
     elif d == b"stop": s["running"] = False; await event.answer("🛑 توقف")
     elif d == b"reset": s.update({"sent": 0, "last_id": 0}); await event.answer("🗑️ تم التصفير")
 
-# ================= MENUS =================
-async def show_main_menu(event):
-    btns = [[Button.inline("📤 النقل", b"transfer_menu")], [Button.inline("⚡ السرقة", b"steal"), Button.inline("🔓 السرقة المحمية", b"steal_protected")]]
-    if isinstance(event, events.CallbackQuery): await event.edit("✅ خيارات الحساب:", buttons=btns)
-    else: await event.respond("✅ خيارات الحساب:", buttons=btns)
-
-async def show_transfer_menu(event):
-    btns = [[Button.inline("📝 عادي", b"new_transfer"), Button.inline("⏯️ استكمال", b"resume_normal")],[Button.inline("📦 تجميعي", b"batch_transfer"), Button.inline("⏯️ استكمال", b"resume_batch")],[Button.inline("🧹 تنظيف الإدمن", b"clean_menu")],[Button.inline("🗑️ ضبط", b"reset"), Button.inline("🔙 رجوع", b"main_menu")]]
-    await event.edit("📤 قائمة النقل:", buttons=btns)
-
-# ================= ENGINES =================
+# ================= ENGINE =================
 async def run_engine(uid):
     s = state[uid]; client = s["client"]; mode = s["mode"]
     src = s.get("source", "me"); dst = s.get("target", "me")
     
-    # جلب العدد الكلي للرسائل (الإصلاح الجديد)
     m_info = await client.get_messages(src, limit=0)
     total = m_info.total
     batch = []
@@ -191,27 +176,8 @@ async def run_engine(uid):
             await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
             await asyncio.sleep(s["delay"])
             
-    if batch and s.get("running"): await client.send_file(dst, batch); s["sent"] += len(batch)
-    await s["status"].edit(f"✅ اكتمل: {s['sent']} / {total}")
-
-async def run_pyro_clean(event, chat_id, session):
-    status_msg = await event.respond("🔄 **جاري حذف رسائل الخدمة...**")
-    try:
-        async with PyroClient(f"c_{event.sender_id}", API_ID, API_HASH, session_string=session) as pc:
-            s_ids = [m.id async for m in pc.get_chat_history(chat_id, limit=500) if m.service]
-            if s_ids:
-                for i in range(0, len(s_ids), 100): await pc.delete_messages(chat_id, s_ids[i:i+100])
-            
-            await status_msg.edit(f"✅ حذفت {len(s_ids)} خدمة.\n👤 جاري طرد الأعضاء...")
-            b_count = 0
-            async for member in pc.get_chat_members(chat_id):
-                if member.status not in [enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR]:
-                    try:
-                        await pc.ban_chat_member(chat_id, member.user.id); b_count += 1
-                        if b_count % 5 == 0: await status_msg.edit(f"📊 طرد: {b_count} | خدمة: {len(s_ids)}")
-                        await asyncio.sleep(1.5)
-                    except: continue
-            await status_msg.edit(f"✅ اكتمل التنظيف!\n👤 مطرودين: {b_count}\n🗑 خدمة: {len(s_ids)}")
-    except Exception as e: await status_msg.edit(f"❌ خطأ: {e}")
+    if batch and s.get("running"): 
+        await client.send_file(dst, batch); s["sent"] += len(batch)
+    await s["status"].edit(f"✅ اكتملت العملية: {s['sent']} / {total}")
 
 bot.run_until_disconnected()
