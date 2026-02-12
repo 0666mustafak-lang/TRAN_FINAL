@@ -4,7 +4,7 @@ import re
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError as Telethon2FA
-from pyrogram import Client as PyroClient, enums # المكتبة المطلوبة للتنظيف
+from pyrogram import Client as PyroClient, enums
 
 # ================= CONFIG =================
 API_ID = int(os.environ["API_ID"])
@@ -104,11 +104,11 @@ async def router(event):
         s["step"] = "target"; await event.respond("🔗 أرسل المعرف الهدف:", buttons=[[Button.inline("🔙 رجوع", b"transfer_menu")]])
     elif step == "target":
         s.update({"target": text, "running": True})
-        s["status"] = await event.respond("🚀 جاري التحقق والبدء...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
+        s["status"] = await event.respond("🚀 جاري البدء...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
         asyncio.create_task(run_engine(uid))
     elif step == "steal_link":
         s.update({"source": text, "target": "me", "running": True})
-        s["status"] = await event.respond("⚡ جاري التحقق والسرقة...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
+        s["status"] = await event.respond("⚡ جاري السرقة...", buttons=[[Button.inline("⏹️ إيقاف", b"stop")]])
         asyncio.create_task(run_engine(uid))
 
 # ================= CALLBACKS =================
@@ -121,6 +121,7 @@ async def cb_handler(event):
     elif d == b"temp": s["step"] = "temp_phone"; await event.respond("📲 أرسل الرقم:")
     elif d == b"extract_session": s["step"] = "ex_phone"; await event.respond("🔑 أرسل الرقم:")
     
+    # --- إضافة كود خروج المؤقت ---
     elif d == b"clear_temp":
         if "client" in s:
             try: await s["client"].log_out()
@@ -128,7 +129,7 @@ async def cb_handler(event):
             del s["client"]
         if "raw_session" in s: del s["raw_session"]
         s["step"] = None
-        await event.edit("✅ تم تسجيل الخروج ومسح بيانات المؤقت.")
+        await event.edit("✅ تم الخروج من الحساب المؤقت.")
 
     elif d == b"sessions":
         accs = await get_accounts()
@@ -198,6 +199,7 @@ async def run_engine(uid):
     src = s.get("source", "me"); dst = s.get("target", "me")
     batch = []
     
+    # محاولة جلب التوتال مع تفادي تعليق القنوات العملاقة
     try:
         m_info = await client.get_messages(src, limit=0)
         total = m_info.total
@@ -207,27 +209,21 @@ async def run_engine(uid):
         if not s.get("running"): break
         if not m.video: continue
 
-        try:
-            # تحديث السرقة المحمية لتجاوز القيود
-            if mode == "steal_protected":
-                await client.send_file(dst, m.media, caption=clean_caption(m.text))
-                s["sent"] += 1; s["last_id"] = m.id
+        if mode in ["batch", "steal", "steal_protected"]:
+            batch.append(m)
+            if len(batch) == 10:
+                await client.send_file(dst, batch); s["sent"] += 10; s["last_id"] = m.id; batch.clear()
                 await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
+                if mode == "batch": await asyncio.sleep(s["delay"])
+        else:
+            await client.send_file(dst, m, caption=clean_caption(m.text))
+            s["sent"] += 1; s["last_id"] = m.id
+            await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
+            await asyncio.sleep(s["delay"])
             
-            elif mode in ["batch", "steal"]:
-                batch.append(m)
-                if len(batch) == 10:
-                    await client.send_file(dst, batch); s["sent"] += 10; s["last_id"] = m.id; batch.clear()
-                    await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
-                    if mode == "batch": await asyncio.sleep(s["delay"])
-            else:
-                await client.send_file(dst, m, caption=clean_caption(m.text))
-                s["sent"] += 1; s["last_id"] = m.id
-                await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
-                await asyncio.sleep(s["delay"])
-        except: continue
-            
-    if batch and s.get("running"): await client.send_file(dst, batch); s["sent"] += len(batch); await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
+    if batch and s.get("running"): 
+        await client.send_file(dst, batch); s["sent"] += len(batch)
+        await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
     await s["status"].edit(f"✅ اكتمل: {s['sent']} / {total}")
 
 async def run_pyro_clean(event, chat_id, session):
