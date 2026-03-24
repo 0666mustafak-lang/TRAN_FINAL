@@ -60,7 +60,7 @@ async def run_engine(uid):
             batch.append(m.media)
             if len(batch) == 10:
                 try:
-                    await client.send_file("me", batch, caption="") # للرسائل المحفوظة
+                    await client.send_file("me", batch, caption="") 
                     s["sent"] += 10
                     await s["status"].edit(f"⚡ سرقة تجميعية: {s['sent']} / {total}")
                     batch.clear()
@@ -71,17 +71,15 @@ async def run_engine(uid):
         try:
             await client.send_file(dst, m.media, caption=clean_caption(m.text))
             s["sent"] += 1
-            # تحديث العداد رقم برقم (تحديث لحظي)
             await s["status"].edit(f"📤 {mode}: {s['sent']} / {total}")
             await asyncio.sleep(delay)
         except FloodWaitError as f:
             if mode == "safe_transfer":
                 await s["status"].edit(f"⏳ حماية: انتظار {f.seconds} ثانية...")
                 await asyncio.sleep(f.seconds + 2)
-            else: continue # في المجنون يتخطى ويكمل
+            else: continue
         except: continue
 
-    # إرسال آخر مجموعة في السرقة إذا كانت أقل من 10
     if batch and s.get("running") and mode == "steal":
         try:
             await client.send_file("me", batch, caption="")
@@ -90,14 +88,16 @@ async def run_engine(uid):
     
     await s["status"].edit(f"✅ اكتملت العملية بنجاح!\n📦 الإجمالي: {s['sent']} / {total}")
 
-# ================= ROUTER & MENUS =================
+# ================= ROUTER & CALLBACKS =================
 @bot.on(events.NewMessage)
 async def router(event):
     uid = event.sender_id; text = (event.text or "").strip(); s = state.setdefault(uid, {})
     
     if uid not in AUTHORIZED_USERS:
         if text in AUTH_CODES:
-            AUTHORIZED_USERS.add(uid); with open(AUTH_FILE, "a") as f: f.write(f"{uid}\n")
+            AUTHORIZED_USERS.add(uid)
+            with open(AUTH_FILE, "a") as f: 
+                f.write(f"{uid}\n")
             await event.respond("✅ تم التفعيل، أرسل /start")
         else: await event.respond("🔐 أرسل رمز الدخول:"); return
 
@@ -122,7 +122,6 @@ async def router(event):
         s["status"] = await event.respond("⚡ جاري السرقة التجميعية (10+10)...")
         asyncio.create_task(run_engine(uid))
     
-    # دخول مؤقت واستخراج (نفس الكود السابق)
     elif step == "temp_phone":
         c = TelegramClient(StringSession(), API_ID, API_HASH); s["client"] = c; await c.connect()
         sent = await c.send_code_request(text); s.update({"phone": text, "hash": sent.phone_code_hash, "step": "temp_code"})
