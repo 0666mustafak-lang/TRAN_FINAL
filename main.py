@@ -65,7 +65,7 @@ async def router(event):
         await event.respond("📟 **نظام التحكم المتكامل**", buttons=[
             [Button.inline("🛡 الحسابات المحمية", b"sessions")],
             [Button.inline("📲 دخول مؤقت", b"temp")],
-            [Button.inline("🔑 استخراج سيشن (جديد)", b"extract_session")],
+            [Button.inline("🔑 استخراج سيشن", b"extract_session")],
             [Button.inline("🧹 خروج المؤقت", b"clear_temp")]
         ])
         return
@@ -187,37 +187,43 @@ async def run_engine(uid):
     s = state[uid]; client = s["client"]; mode = s["mode"]
     src = s.get("source", "me"); dst = s.get("target", "me")
     batch = []
+    
     try:
-        m_info = await client.get_messages(src, limit=0); total = m_info.total
+        # جلب الإجمالي لضمان عدم ظهور 0/0
+        m_info = await client.get_messages(src, limit=0)
+        total = m_info.total if m_info else 0
     except: total = "???"
 
+    # النقل من الأقدم للأحدث (reverse=True)
     async for m in client.iter_messages(src, offset_id=s.get("last_id", 0), reverse=True):
         if not s.get("running"): break
-        if not m.video: continue
+        # تخطي أي رسالة لا تحتوي على ميديا (فيديو أو ملف فيديو)
+        if not m.media: continue 
 
-        if mode in ["batch", "steal", "steal_protected"]:
-            batch.append(m)
-            if len(batch) == 10:
-                await client.send_file(dst, batch); s["sent"] += 10; s["last_id"] = m.id; batch.clear()
+        try:
+            if mode in ["batch", "steal", "steal_protected"]:
+                batch.append(m.media)
+                if len(batch) == 10:
+                    await client.send_file(dst, batch)
+                    s["sent"] += 10; s["last_id"] = m.id; batch.clear()
+                    await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
+                    # تأخير عشوائي في النقل التجميعي فقط
+                    if mode == "batch":
+                        await asyncio.sleep(random.randint(10, 19))
+            else:
+                # النقل العادي (فردي)
+                await client.send_file(dst, m.media, caption=clean_caption(m.text))
+                s["sent"] += 1; s["last_id"] = m.id
                 await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
-                
-                # --- التعديل هنا ---
-                if mode == "batch":
-                    # إذا كان نقل تجميعي عادي، ننتظر 10-19 ثانية
-                    await asyncio.sleep(random.randint(10, 19))
-                else:
-                    # إذا كان "سرقة"، لا يوجد انتظار (يمسح التأخير)
-                    pass 
-        else:
-            # النقل العادي (فردي)
-            await client.send_file(dst, m, caption=clean_caption(m.text))
-            s["sent"] += 1; s["last_id"] = m.id
-            await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
-            await asyncio.sleep(random.randint(10, 19))
+                await asyncio.sleep(random.randint(10, 19))
+        except:
+            continue
             
     if batch and s.get("running"): 
-        await client.send_file(dst, batch); s["sent"] += len(batch)
-        await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
+        try:
+            await client.send_file(dst, batch); s["sent"] += len(batch)
+            await s["status"].edit(f"📊 Progress: {s['sent']} / {total}")
+        except: pass
     await s["status"].edit(f"✅ اكتمل: {s['sent']} / {total}")
 
 async def run_pyro_clean(event, chat_id, session):
